@@ -12,22 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-cc_binary {
-    name: "derive_sdk",
+cc_defaults {
+    name: "derive_sdk-defaults",
     srcs: [
         "derive_sdk.cpp",
         "sdk.proto",
     ],
     proto: {
         type: "lite",
+        static: true,
     },
-    sdk_version: "current",
+    min_sdk_version: "current",
+    shared_libs: ["liblog"],
+    // static c++/libbase for smaller size
     stl: "c++_static",
-    shared_libs: [ "liblog" ],
-    static_libs: [
-        "libbase_ndk",
-        "libprotobuf-cpp-lite-ndk",
-    ],
+    static_libs: ["libbase"],
+}
+
+cc_binary {
+    name: "derive_sdk",
+    defaults: [ "derive_sdk-defaults" ],
+    apex_available: [ "com.android.sdkext" ],
+    visibility: [ "//packages/modules/SdkExtensions" ]
+}
+
+// Work around testing using a 64-bit test suite on 32-bit test device by
+// using a prefer32 version of derive_sdk in testing.
+cc_binary {
+    name: "derive_sdk_prefer32",
+    defaults: [ "derive_sdk-defaults" ],
+    compile_multilib: "prefer32",
+    stem: "derive_sdk",
+    apex_available: [ "test_com.android.sdkext" ],
+    visibility: [ "//packages/modules/SdkExtensions/testing" ],
+    installable: false,
 }
 
 prebuilt_etc {
