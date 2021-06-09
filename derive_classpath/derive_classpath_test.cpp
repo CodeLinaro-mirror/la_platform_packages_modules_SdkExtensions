@@ -19,15 +19,19 @@
 #include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/properties.h>
+#include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <android-modules-utils/sdk_level.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 
 #include <cstdlib>
+#include <string_view>
 
-#include "packages/modules/SdkExtensions/proto/classpaths.pb.h"
+#include "android-base/unique_fd.h"
+#include "packages/modules/common/proto/classpaths.pb.h"
 
 namespace android {
 namespace derive_classpath {
@@ -51,9 +55,9 @@ class DeriveClasspathTest : public ::testing::Test {
   const std::string working_dir() { return std::string(tempDir_.path); }
 
   // Parses the generated classpath exports file and returns each line individually.
-  std::vector<std::string> ParseExportsFile() {
+  std::vector<std::string> ParseExportsFile(const char* file = "/data/system/environ/classpath") {
     std::string contents;
-    EXPECT_TRUE(android::base::ReadFileToString("/data/system/environ/classpath", &contents));
+    EXPECT_TRUE(android::base::ReadFileToString(file, &contents, /*follow_symlinks=*/true));
     return android::base::Split(contents, "\n");
   }
 
@@ -110,72 +114,6 @@ class DeriveClasspathTest : public ::testing::Test {
   TemporaryDir tempDir_;
 };
 
-// Check BOOTCLASSPATH content.
-TEST_F(DeriveClasspathTest, DefaultBootclasspath) {
-  // Re-generate default on device classpaths
-  GenerateClasspathExports();
-
-  auto exportLines = ParseExportsFile();
-  auto splitExportLine = SplitClasspathExportLine(exportLines[0]);
-
-  EXPECT_EQ("BOOTCLASSPATH", splitExportLine[1]);
-
-  auto exportValue = splitExportLine[2];
-
-  EXPECT_NE(std::string::npos, exportValue.find(kLibartJarFilepath));
-  EXPECT_NE(std::string::npos, exportValue.find(kFrameworkJarFilepath));
-  EXPECT_NE(std::string::npos, exportValue.find(kSdkExtensionsJarFilepath));
-
-  EXPECT_EQ(std::string::npos, exportValue.find(kServicesJarFilepath));
-
-  CheckClasspathGroupOrder(exportValue,
-                           {"/apex/com.android.art", "/system", "/system_ext", "/apex"});
-}
-
-// Check DEX2OATBOOTCLASSPATH content.
-TEST_F(DeriveClasspathTest, DefaultDex2oatbootclasspath) {
-  // Re-generate default on device classpaths
-  GenerateClasspathExports();
-
-  auto exportLines = ParseExportsFile();
-  auto splitExportLine = SplitClasspathExportLine(exportLines[1]);
-
-  EXPECT_EQ("DEX2OATBOOTCLASSPATH", splitExportLine[1]);
-
-  auto exportValue = splitExportLine[2];
-
-  EXPECT_NE(std::string::npos, exportValue.find(kLibartJarFilepath));
-  EXPECT_NE(std::string::npos, exportValue.find(kFrameworkJarFilepath));
-
-  // DEX2OATBOOTCLASSPATH should only contain ART and system jars
-  EXPECT_EQ(std::string::npos, exportValue.find(kSdkExtensionsJarFilepath));
-
-  EXPECT_EQ(std::string::npos, exportValue.find(kServicesJarFilepath));
-
-  CheckClasspathGroupOrder(exportValue, {"/apex/com.android.art", "/system", "/system_ext"});
-}
-
-// Check SYSTEMSERVERCLASSPATH content.
-TEST_F(DeriveClasspathTest, DefaultSystemserverclasspath) {
-  // Re-generate default on device classpaths
-  GenerateClasspathExports();
-
-  auto exportLines = ParseExportsFile();
-  auto splitExportLine = SplitClasspathExportLine(exportLines[2]);
-
-  EXPECT_EQ("SYSTEMSERVERCLASSPATH", splitExportLine[1]);
-
-  auto exportValue = splitExportLine[2];
-
-  EXPECT_EQ(std::string::npos, exportValue.find(kLibartJarFilepath));
-  EXPECT_EQ(std::string::npos, exportValue.find(kFrameworkJarFilepath));
-  EXPECT_EQ(std::string::npos, exportValue.find(kSdkExtensionsJarFilepath));
-
-  EXPECT_NE(std::string::npos, exportValue.find(kServicesJarFilepath));
-
-  CheckClasspathGroupOrder(exportValue, {"/system", "/system_ext", "/apex"});
-}
-
 // Check only known *CLASSPATH variables are exported.
 TEST_F(DeriveClasspathTest, DefaultNoUnknownClasspaths) {
   // Re-generate default on device classpaths
@@ -225,6 +163,26 @@ TEST_F(DeriveClasspathTest, ModulesAreSorted) {
   GenerateClasspathExports(working_dir());
 
   auto exportLines = ParseExportsFile();
+  auto splitExportLine = SplitClasspathExportLine(exportLines[0]);
+  auto exportValue = splitExportLine[2];
+
+  EXPECT_EQ("art:system:bar:baz:foo", exportValue);
+}
+
+// Test we can output to custom files.
+TEST_F(DeriveClasspathTest, CustomOutputLocation) {
+  AddJarToClasspath(working_dir() + "/apex/com.android.art", "art", BOOTCLASSPATH);
+  AddJarToClasspath(working_dir() + "/system", "system", BOOTCLASSPATH);
+  AddJarToClasspath(working_dir() + "/apex/com.android.foo", "foo", BOOTCLASSPATH);
+  AddJarToClasspath(working_dir() + "/apex/com.android.bar", "bar", BOOTCLASSPATH);
+  AddJarToClasspath(working_dir() + "/apex/com.android.baz", "baz", BOOTCLASSPATH);
+
+  android::base::unique_fd fd(memfd_create("temp_file", MFD_CLOEXEC));
+  ASSERT_TRUE(fd.ok()) << "Unable to open temp-file";
+  std::string file_name = android::base::StringPrintf("/proc/self/fd/%d", fd.get());
+  GenerateClasspathExports(working_dir(), file_name);
+
+  auto exportLines = ParseExportsFile(file_name.c_str());
   auto splitExportLine = SplitClasspathExportLine(exportLines[0]);
   auto exportValue = splitExportLine[2];
 
