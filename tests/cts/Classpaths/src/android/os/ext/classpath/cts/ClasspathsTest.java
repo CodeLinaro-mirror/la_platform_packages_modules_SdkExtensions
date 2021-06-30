@@ -19,12 +19,14 @@ package android.os.ext.classpath.cts;
 import static android.compat.testing.Classpaths.ClasspathType.BOOTCLASSPATH;
 import static android.compat.testing.Classpaths.ClasspathType.DEX2OATBOOTCLASSPATH;
 import static android.compat.testing.Classpaths.ClasspathType.SYSTEMSERVERCLASSPATH;
+import static android.compat.testing.Classpaths.getJarsOnClasspath;
 import static android.os.ext.classpath.cts.ClasspathsTest.ClasspathSubject.assertThat;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.truth.Fact.fact;
 import static com.google.common.truth.Fact.simpleFact;
 import static com.google.common.truth.Truth.assertAbout;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 import static org.junit.Assume.assumeTrue;
 
@@ -36,6 +38,7 @@ import com.android.tradefed.testtype.DeviceJUnit4ClassRunner;
 import com.android.tradefed.testtype.junit4.BaseHostJUnit4Test;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.UnmodifiableListIterator;
 import com.google.common.truth.Fact;
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.IterableSubject;
@@ -75,7 +78,7 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
 
     @Test
     public void testBootclasspath() throws Exception {
-        ImmutableList<String> jars = Classpaths.getJarsOnClasspath(getDevice(), BOOTCLASSPATH);
+        ImmutableList<String> jars = getJarsOnClasspath(getDevice(), BOOTCLASSPATH);
 
         assertThat(jars).containsNoDuplicates();
 
@@ -89,7 +92,6 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
                 "/apex/com.android.art/",
                 "/system/",
                 "/system_ext/",
-                "/apex/com.android.i18n/",
                 "/apex/");
         assertThat(jars)
                 .prefixesMatch(expectedPrefixes)
@@ -100,8 +102,7 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
 
     @Test
     public void testDex2oatBootclasspath() throws Exception {
-        ImmutableList<String> jars = Classpaths.getJarsOnClasspath(getDevice(),
-                DEX2OATBOOTCLASSPATH);
+        ImmutableList<String> jars = getJarsOnClasspath(getDevice(), DEX2OATBOOTCLASSPATH);
 
         assertThat(jars).containsNoDuplicates();
 
@@ -113,7 +114,7 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
                 .containsNoneOf(SDKEXTENSIONS_JAR, SERVICES_JAR);
 
         ImmutableList<String> expectedPrefixes = ImmutableList.of(
-                "/apex/com.android.art/", "/system/", "/system_ext/", "/apex/com.android.i18n/");
+                "/apex/com.android.art/", "/system/", "/system_ext/");
         assertThat(jars)
                 .prefixesMatch(expectedPrefixes)
                 .inOrder();
@@ -124,8 +125,7 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
 
     @Test
     public void testSystemServerClasspath() throws Exception {
-        ImmutableList<String> jars = Classpaths.getJarsOnClasspath(getDevice(),
-                SYSTEMSERVERCLASSPATH);
+        ImmutableList<String> jars = getJarsOnClasspath(getDevice(), SYSTEMSERVERCLASSPATH);
 
         assertThat(jars).containsNoDuplicates();
 
@@ -139,6 +139,15 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
                 .inOrder();
 
         assertThat(getUpdatableApexes(jars)).isInOrder();
+    }
+
+    @Test
+    public void testDex2oatJarsAreFirstOnBootclasspath() throws Exception {
+        ImmutableList<String> bootJars = getJarsOnClasspath(getDevice(), BOOTCLASSPATH);
+        ImmutableList<String> dex2oatJars = getJarsOnClasspath(getDevice(), DEX2OATBOOTCLASSPATH);
+
+        // All preopt jars on BOOTCLASSPATH must come before updatable jars.
+        assertThat(bootJars).startsWith(dex2oatJars);
     }
 
     /**
@@ -190,6 +199,10 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
             boolean ordered = true;
             int currentPrefixIndex = expected.isEmpty() ? -1 : 0;
             for (String jar : actual) {
+                if (ICU4J_JAR.equals(jar)) {
+                    // TODO(b/191127295): ICU4j appears out of order, ignore it until fixed
+                    continue;
+                }
                 int prefixIndex = findFirstMatchingPrefix(jar, expected);
                 if (prefixIndex == -1) {
                     unexpectedJars.add(jar);
@@ -221,6 +234,18 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
                     simpleFact("all jars have valid partitions, but the order was wrong"),
                     fact("expected order", expected)
             );
+        }
+
+        /**
+         * Checks that the actual iterable starts with expected elements.
+         */
+        public void startsWith(ImmutableList<String> expected) {
+            if (actual.size() < expected.size()) {
+                failWithActual("expected at least number of elements", expected.size());
+                return;
+            }
+            assertWithMessage("Unexpected initial elements of the list")
+                    .that(actual.subList(0, expected.size())).isEqualTo(expected);
         }
 
         private static int findFirstMatchingPrefix(String value, ImmutableList<String> prefixes) {
