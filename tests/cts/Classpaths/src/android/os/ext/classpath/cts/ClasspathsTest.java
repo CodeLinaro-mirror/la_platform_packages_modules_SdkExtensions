@@ -19,26 +19,36 @@ package android.os.ext.classpath.cts;
 import static android.compat.testing.Classpaths.ClasspathType.BOOTCLASSPATH;
 import static android.compat.testing.Classpaths.ClasspathType.DEX2OATBOOTCLASSPATH;
 import static android.compat.testing.Classpaths.ClasspathType.SYSTEMSERVERCLASSPATH;
+import static android.compat.testing.Classpaths.getJarsOnClasspath;
 import static android.os.ext.classpath.cts.ClasspathsTest.ClasspathSubject.assertThat;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.truth.Fact.fact;
 import static com.google.common.truth.Fact.simpleFact;
 import static com.google.common.truth.Truth.assertAbout;
+import static com.google.common.truth.Truth.assertWithMessage;
+
+import static org.junit.Assume.assumeTrue;
 
 import android.compat.testing.Classpaths;
 
+import com.android.compatibility.common.util.ApiLevelUtil;
+import com.android.tradefed.device.ITestDevice;
 import com.android.tradefed.testtype.DeviceJUnit4ClassRunner;
 import com.android.tradefed.testtype.junit4.BaseHostJUnit4Test;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.UnmodifiableListIterator;
 import com.google.common.truth.Fact;
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.IterableSubject;
 import com.google.common.truth.Ordered;
 
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import java.nio.file.Paths;
 
 /**
  * Tests for the contents of *CLASSPATH environ variables on a device.
@@ -59,9 +69,16 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
             "/apex/com.android.sdkext/javalib/framework-sdkextensions.jar";
     private static final String SERVICES_JAR = "/system/framework/services.jar";
 
+    @Before
+    public void before() throws Exception {
+        ITestDevice device = getDevice();
+        assumeTrue(
+                ApiLevelUtil.isAfter(device, 30) || ApiLevelUtil.getCodename(device).equals("S"));
+    }
+
     @Test
     public void testBootclasspath() throws Exception {
-        ImmutableList<String> jars = Classpaths.getJarsOnClasspath(getDevice(), BOOTCLASSPATH);
+        ImmutableList<String> jars = getJarsOnClasspath(getDevice(), BOOTCLASSPATH);
 
         assertThat(jars).containsNoDuplicates();
 
@@ -80,16 +97,17 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
         assertThat(jars)
                 .prefixesMatch(expectedPrefixes)
                 .inOrder();
+
+        assertThat(getUpdatableApexes(jars)).isInOrder();
     }
 
     @Test
     public void testDex2oatBootclasspath() throws Exception {
-        ImmutableList<String> jars = Classpaths.getJarsOnClasspath(getDevice(),
-                DEX2OATBOOTCLASSPATH);
+        ImmutableList<String> jars = getJarsOnClasspath(getDevice(), DEX2OATBOOTCLASSPATH);
 
         assertThat(jars).containsNoDuplicates();
 
-        // DEX2OATBOOTCLASSPATH should only contain ART, core-icu4j, and platform system jars
+        // DEX2OATBOOTCLASSPATH must only contain ART, core-icu4j, and platform system jars
         assertThat(jars)
                 .containsAtLeast(LIBART_JAR, FRAMEWORK_JAR, ICU4J_JAR)
                 .inOrder();
@@ -101,12 +119,14 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
         assertThat(jars)
                 .prefixesMatch(expectedPrefixes)
                 .inOrder();
+
+        // No updatable jars on DEX2OATBOOTCLASSPATH
+        assertThat(getUpdatableApexes(jars)).isEmpty();
     }
 
     @Test
     public void testSystemServerClasspath() throws Exception {
-        ImmutableList<String> jars = Classpaths.getJarsOnClasspath(getDevice(),
-                SYSTEMSERVERCLASSPATH);
+        ImmutableList<String> jars = getJarsOnClasspath(getDevice(), SYSTEMSERVERCLASSPATH);
 
         assertThat(jars).containsNoDuplicates();
 
@@ -118,6 +138,33 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
         assertThat(jars)
                 .prefixesMatch(expectedPrefixes)
                 .inOrder();
+
+        assertThat(getUpdatableApexes(jars)).isInOrder();
+    }
+
+    @Test
+    public void testDex2oatJarsAreFirstOnBootclasspath() throws Exception {
+        ImmutableList<String> bootJars = getJarsOnClasspath(getDevice(), BOOTCLASSPATH);
+        ImmutableList<String> dex2oatJars = getJarsOnClasspath(getDevice(), DEX2OATBOOTCLASSPATH);
+
+        // All preopt jars on BOOTCLASSPATH must come before updatable jars.
+        assertThat(bootJars).startsWith(dex2oatJars);
+    }
+
+    /**
+     * Returns a derived subject with names of the updatable APEXes preserving the original
+     * order.
+     */
+    private static ImmutableList<String> getUpdatableApexes(ImmutableList<String> jars) {
+        return jars.stream()
+                .filter(jar -> jar.startsWith("/apex"))
+                // ICU4J_JAR is the last non-updatable APEX jar, i.e. everything after is
+                // considered to be an updatable APEX jar
+                .dropWhile(jar -> !jar.equals(ICU4J_JAR))
+                .skip(1)
+                // Map to APEX name from "/apex/<name>/javalibs/foo.jar"
+                .map(jar -> Paths.get(jar).getName(1).toString())
+                .collect(ImmutableList.toImmutableList());
     }
 
     final static class ClasspathSubject extends IterableSubject {
@@ -186,6 +233,18 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
             );
         }
 
+        /**
+         * Checks that the actual iterable starts with expected elements.
+         */
+        public void startsWith(ImmutableList<String> expected) {
+            if (actual.size() < expected.size()) {
+                failWithActual("expected at least number of elements", expected.size());
+                return;
+            }
+            assertWithMessage("Unexpected initial elements of the list")
+                    .that(actual.subList(0, expected.size())).isEqualTo(expected);
+        }
+
         private static int findFirstMatchingPrefix(String value, ImmutableList<String> prefixes) {
             for (int i = 0; i < prefixes.size(); i++) {
                 if (value.startsWith(prefixes.get(i))) {
@@ -194,5 +253,6 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
             }
             return -1;
         }
+
     }
 }
