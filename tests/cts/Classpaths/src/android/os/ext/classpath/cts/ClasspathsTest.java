@@ -30,15 +30,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
 
 import static org.junit.Assume.assumeTrue;
 
-import android.compat.testing.Classpaths;
-
-import com.android.compatibility.common.util.ApiLevelUtil;
+import com.android.modules.utils.build.testing.DeviceSdkLevel;
 import com.android.tradefed.device.ITestDevice;
 import com.android.tradefed.testtype.DeviceJUnit4ClassRunner;
 import com.android.tradefed.testtype.junit4.BaseHostJUnit4Test;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.UnmodifiableListIterator;
 import com.google.common.truth.Fact;
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.IterableSubject;
@@ -72,8 +69,8 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
     @Before
     public void before() throws Exception {
         ITestDevice device = getDevice();
-        assumeTrue(
-                ApiLevelUtil.isAfter(device, 30) || ApiLevelUtil.getCodename(device).equals("S"));
+        DeviceSdkLevel deviceSdkLevel = new DeviceSdkLevel(device);
+        assumeTrue(deviceSdkLevel.isDeviceAtLeastS());
     }
 
     @Test
@@ -92,6 +89,7 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
                 "/apex/com.android.art/",
                 "/system/",
                 "/system_ext/",
+                "/apex/com.android.i18n/",
                 "/apex/");
         assertThat(jars)
                 .prefixesMatch(expectedPrefixes)
@@ -118,7 +116,7 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
         assertThat(bootJars).containsAtLeastElementsIn(jars);
 
         ImmutableList<String> expectedPrefixes = ImmutableList.of(
-                "/apex/com.android.art/", "/system/", "/system_ext/");
+                "/apex/com.android.art/", "/system/", "/system_ext/", "/apex/com.android.i18n/");
         assertThat(jars)
                 .prefixesMatch(expectedPrefixes)
                 .inOrder();
@@ -203,10 +201,6 @@ public class ClasspathsTest extends BaseHostJUnit4Test {
             boolean ordered = true;
             int currentPrefixIndex = expected.isEmpty() ? -1 : 0;
             for (String jar : actual) {
-                if (ICU4J_JAR.equals(jar)) {
-                    // TODO(b/191127295): ICU4j appears out of order, ignore it until fixed
-                    continue;
-                }
                 int prefixIndex = findFirstMatchingPrefix(jar, expected);
                 if (prefixIndex == -1) {
                     unexpectedJars.add(jar);
