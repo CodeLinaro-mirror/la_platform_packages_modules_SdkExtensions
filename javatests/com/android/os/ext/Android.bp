@@ -23,6 +23,7 @@ android_test {
         "androidx.test.rules",
         "ctstestrunner-axt",
         "modules-utils-build",
+        "test_util_current_version",
     ],
     srcs: ["*.java"],
     test_config: "CtsSdkExtensionsTestCases.xml",
