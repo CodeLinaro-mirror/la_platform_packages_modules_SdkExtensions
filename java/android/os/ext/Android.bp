@@ -13,6 +13,7 @@
 // limitations under the License.
 
 package {
+    default_team: "trendy_team_updatable_sdk_apis",
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
@@ -45,14 +46,5 @@ java_sdk_library {
     apex_available: [
         "com.android.sdkext",
         "test_com.android.sdkext",
-    ],
-}
-
-java_api_contribution {
-    name: "framework-sdkextensions-public-stubs",
-    api_surface: "public",
-    api_file: "api/current.txt",
-    visibility: [
-        "//build/orchestrator/apis",
     ],
 }
